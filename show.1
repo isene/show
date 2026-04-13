@@ -1,0 +1,124 @@
+.TH SHOW 1 "April 2026" "show 0.1.0" "User Commands"
+.SH NAME
+show \- pure assembly file viewer with syntax highlighting
+.SH SYNOPSIS
+.B show
+[\fIfile\fR]
+.br
+.B show
+\-\-lines \fIM-N\fR [\-\-width \fIW\fR] \fIfile\fR
+.br
+\fIcommand\fR | \fBshow\fR
+.SH DESCRIPTION
+.B show
+is a file viewer written in x86_64 Linux assembly with syntax highlighting
+for 20+ programming languages. No libc, no runtime, pure syscalls.
+Single static binary (38KB).
+.PP
+Three operating modes:
+.TP
+.B Pager mode
+(default when stdout is a terminal) Full-screen viewer with scrolling,
+line numbers, and a status bar. Uses the alternate screen buffer.
+.TP
+.B Cat mode
+(when stdout is a pipe) Outputs all lines with syntax highlighting.
+Works like
+.BR bat (1)
+or
+.BR cat (1)
+with colors.
+.TP
+.B Pane mode
+(with \-\-lines flag) Outputs a specific range of lines with highlighting.
+No interactive controls. Designed for embedding in TUI applications.
+.SH OPTIONS
+.TP
+.B \-\-lines \fIM-N\fR
+Output only lines M through N (1-indexed). Enables pane mode.
+.TP
+.B \-\-width \fIW\fR
+Set output width for pane mode.
+.TP
+.B \-\-version
+Print version and exit.
+.SH KEY BINDINGS
+In pager mode:
+.TP
+.B j, Down
+Scroll down one line.
+.TP
+.B k, Up
+Scroll up one line.
+.TP
+.B Space, PgDn
+Scroll down one page.
+.TP
+.B b, PgUp
+Scroll up one page.
+.TP
+.B g, Home
+Go to top of file.
+.TP
+.B G, End
+Go to end of file.
+.TP
+.B l
+Toggle line numbers.
+.TP
+.B Left, Right
+Horizontal scroll.
+.TP
+.B q
+Quit.
+.SH LANGUAGES
+Syntax highlighting is supported for:
+Assembly (.asm, .s),
+C/C++ (.c, .h, .cpp, .hpp, .cc),
+C# (.cs),
+Forth (.fth, .4th, .forth),
+Go (.go),
+Java (.java),
+JavaScript/TypeScript (.js, .ts, .jsx, .tsx),
+Julia (.jl),
+Lua (.lua),
+Python (.py),
+Ruby (.rb, .gemspec),
+Rust (.rs),
+Shell (.sh, .bash, .zsh, .fish),
+XRPN (.xrpn),
+JSON (.json),
+YAML (.yaml, .yml),
+TOML (.toml),
+Markdown (.md),
+Config (.conf, .cfg, .ini).
+.PP
+Files without extensions are identified by shebang lines
+(e.g., #!/usr/bin/env ruby).
+.SH COLOR SCHEME
+Keywords (197, hot pink),
+Strings (78, green),
+Comments (242, gray),
+Numbers (141, purple),
+Types (81, cyan),
+Functions (148, yellow-green),
+Operators (248, light gray).
+.SH FILES
+.B show
+reads files via mmap (zero-copy). Pipe input is buffered up to 1MB.
+.SH PART OF
+.B CHasm
+(CHange to ASM) \- a suite of tools rewritten in pure assembly.
+See also
+.BR bare (1).
+.SH AUTHOR
+Geir Isene <g@isene.com>
+.br
+https://isene.org
+.SH LICENSE
+Unlicense (public domain).
+.SH SEE ALSO
+.BR less (1),
+.BR bat (1),
+.BR cat (1),
+.BR bare (1)
