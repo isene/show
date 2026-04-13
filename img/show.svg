@@ -1,0 +1,59 @@
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 256 256" width="256" height="256">
+  <defs>
+    <linearGradient id="bg" x1="0%" y1="0%" x2="100%" y2="100%">
+      <stop offset="0%" style="stop-color:#1a1a2e"/>
+      <stop offset="100%" style="stop-color:#0a0a14"/>
+    </linearGradient>
+    <linearGradient id="hl" x1="0%" y1="0%" x2="100%" y2="100%">
+      <stop offset="0%" style="stop-color:#c5396a"/>
+      <stop offset="100%" style="stop-color:#4ec9b0"/>
+    </linearGradient>
+  </defs>
+  <style>
+    @keyframes scroll { 0%,100% { opacity: 0.6; } 50% { opacity: 1; } }
+    .active { animation: scroll 2s ease-in-out infinite; }
+  </style>
+  <circle cx="128" cy="128" r="120" fill="url(#bg)" stroke="url(#hl)" stroke-width="3"/>
+  <!-- Terminal window -->
+  <rect x="38" y="48" width="180" height="130" rx="6" fill="#0d0d1a" stroke="#c5396a" stroke-width="1.5" opacity="0.9"/>
+  <!-- Title bar -->
+  <rect x="38" y="48" width="180" height="14" rx="6" fill="#1a1a2a" opacity="0.8"/>
+  <circle cx="50" cy="55" r="3" fill="#ff5f56" opacity="0.7"/>
+  <circle cx="60" cy="55" r="3" fill="#ffbd2e" opacity="0.7"/>
+  <circle cx="70" cy="55" r="3" fill="#27c93f" opacity="0.7"/>
+  <text x="128" y="58" font-family="monospace" font-size="6" fill="#888" text-anchor="middle">main.rs</text>
+  <!-- Code lines with syntax colors -->
+  <text x="42" y="75" font-family="monospace" font-size="6" fill="#555">  1</text>
+  <text x="58" y="75" font-family="monospace" font-size="7" fill="#c5396a">fn</text>
+  <text x="70" y="75" font-family="monospace" font-size="7" fill="#94c948">main</text>
+  <text x="94" y="75" font-family="monospace" font-size="7" fill="#aab">()</text>
+  <text x="103" y="75" font-family="monospace" font-size="7" fill="#aab">{</text>
+  <text x="42" y="87" font-family="monospace" font-size="6" fill="#555">  2</text>
+  <text x="66" y="87" font-family="monospace" font-size="7" fill="#c5396a">let</text>
+  <text x="83" y="87" font-family="monospace" font-size="7" fill="#aab">x</text>
+  <text x="90" y="87" font-family="monospace" font-size="7" fill="#888">=</text>
+  <text x="97" y="87" font-family="monospace" font-size="7" fill="#b48ead">42</text>
+  <text x="106" y="87" font-family="monospace" font-size="7" fill="#aab">;</text>
+  <text x="42" y="99" font-family="monospace" font-size="6" fill="#555">  3</text>
+  <text x="66" y="99" font-family="monospace" font-size="7" fill="#c5396a">let</text>
+  <text x="83" y="99" font-family="monospace" font-size="7" fill="#aab">s</text>
+  <text x="90" y="99" font-family="monospace" font-size="7" fill="#888">=</text>
+  <text x="97" y="99" font-family="monospace" font-size="7" fill="#4ec97a">"hello"</text>
+  <text x="133" y="99" font-family="monospace" font-size="7" fill="#aab">;</text>
+  <text x="42" y="111" font-family="monospace" font-size="6" fill="#555">  4</text>
+  <text x="66" y="111" font-family="monospace" font-size="7" fill="#777">// print it</text>
+  <text x="42" y="123" font-family="monospace" font-size="6" fill="#555">  5</text>
+  <text x="66" y="123" font-family="monospace" font-size="7" fill="#94c948">println!</text>
+  <text x="108" y="123" font-family="monospace" font-size="7" fill="#aab">(</text>
+  <text x="113" y="123" font-family="monospace" font-size="7" fill="#4ec97a">"{}"</text>
+  <text x="130" y="123" font-family="monospace" font-size="7" fill="#aab">, s);</text>
+  <text x="42" y="135" font-family="monospace" font-size="6" fill="#555">  6</text>
+  <text x="58" y="135" font-family="monospace" font-size="7" fill="#aab">}</text>
+  <!-- Status bar -->
+  <rect class="active" x="38" y="148" width="180" height="11" rx="0" fill="#333" opacity="0.9"/>
+  <text x="42" y="156" font-family="monospace" font-size="6" fill="#ccc">main.rs  L1-6/6</text>
+  <text x="185" y="156" font-family="monospace" font-size="6" fill="#ccc">show</text>
+  <!-- Label -->
+  <text x="128" y="202" font-family="monospace" font-size="24" font-weight="bold" fill="url(#hl)" text-anchor="middle" letter-spacing="3">show</text>
+  <text x="128" y="220" font-family="monospace" font-size="8" fill="#888" text-anchor="middle">pure assembly file viewer</text>
+</svg>
