@@ -494,6 +494,29 @@ tp_dispatch:
     dq 0            ; LANG_XRPN
     dq tp_julia     ; LANG_JULIA
 
+; Theme data: keyword, string, comment, number, type, func, preproc, punct
+; 8 bytes per theme
+theme_names:
+    dq .tn_monokai, .tn_solarized, .tn_nord, .tn_dracula, .tn_gruvbox, .tn_plain
+    dq 0
+.tn_monokai:   db "monokai", 0
+.tn_solarized: db "solarized", 0
+.tn_nord:      db "nord", 0
+.tn_dracula:   db "dracula", 0
+.tn_gruvbox:   db "gruvbox", 0
+.tn_plain:     db "plain", 0
+
+theme_data:
+;                kw   str  cmt  num  typ  func prep punct
+.td_monokai:   db 197, 78,  242, 141, 81,  148, 197, 248
+.td_solarized: db 136, 64,  245, 125, 33,  166, 136, 240
+.td_nord:      db 110, 108, 60,  176, 73,  222, 110, 103
+.td_dracula:   db 212, 84,  61,  141, 117, 228, 212, 189
+.td_gruvbox:   db 167, 142, 245, 175, 109, 214, 167, 223
+.td_plain:     db 252, 252, 245, 252, 252, 252, 252, 245
+
+flag_theme: db "--theme", 0
+
 ; Operator characters (null-terminated)
 op_chars: db "=+-*/<>!&|^~%", 0
 
@@ -543,6 +566,16 @@ pane_start_line:    resq 1
 pane_end_line:      resq 1
 pane_width:         resq 1
 
+; Active theme colors
+th_keyword:         resb 1
+th_string:          resb 1
+th_comment:         resb 1
+th_number:          resb 1
+th_type:            resb 1
+th_func:            resb 1
+th_preproc:         resb 1
+th_punct:           resb 1
+
 ; Syntax highlighting
 language:           resq 1
 kw_table_ptr:       resq 1
@@ -573,16 +606,74 @@ section .text
 global _start
 
 _start:
+    ; Initialize default theme (monokai)
+    call init_default_theme
+
     ; Parse arguments
     mov rdi, [rsp]          ; argc
     lea rsi, [rsp + 8]      ; argv
     cmp rdi, 1
     jle .check_stdin
 
+    ; Scan all argv for --theme before other processing
+    push rdi
+    push rsi
+    mov rcx, 1
+.scan_theme:
+    cmp rcx, rdi
+    jge .scan_theme_done
+    mov rax, [rsi + rcx*8]
+    test rax, rax
+    jz .scan_theme_done
+    ; Check for "--theme"
+    push rcx
+    push rdi
+    push rsi
+    mov rdi, rax
+    lea rsi, [flag_theme]
+    call strcmp
+    pop rsi
+    pop rdi
+    pop rcx
+    test rax, rax
+    jnz .scan_theme_next
+    ; Found --theme, next arg is theme name
+    inc rcx
+    cmp rcx, rdi
+    jge .scan_theme_done
+    mov rdi, [rsi + rcx*8]
+    call set_theme
+    jmp .scan_theme_done
+.scan_theme_next:
+    inc rcx
+    jmp .scan_theme
+.scan_theme_done:
+    pop rsi
+    pop rdi
+
     ; Check argv[1]
     mov rax, [rsi + 8]      ; argv[1]
     test rax, rax
     jz .check_stdin
+    ; Skip --theme and its arg
+    push rdi
+    push rsi
+    mov rdi, rax
+    lea rsi, [flag_theme]
+    call strcmp
+    pop rsi
+    pop rdi
+    test rax, rax
+    jnz .not_theme_arg
+    ; argv[1] is --theme, skip to argv[3]
+    cmp rdi, 4
+    jl .check_stdin
+    mov rax, [rsi + 24]     ; argv[3]
+    test rax, rax
+    jz .check_stdin
+    jmp .have_filename_direct
+.not_theme_arg:
+    mov rax, [rsi + 8]      ; reload argv[1]
 
     ; Check for --version
     cmp dword [rax], '--ve'
@@ -641,6 +732,7 @@ _start:
 
 .regular_file:
     mov rax, [rsi + 8]      ; argv[1] = filename
+.have_filename_direct:
 .have_filename:
     ; Copy filename to file_path
     mov rsi, rax
@@ -1983,7 +2075,7 @@ highlight_line:
 
 ; ── String handling ──
 .hl_start_string_dq:
-    mov al, COL_STRING
+    movzx eax, byte [th_string]
     call out_color
     mov r15, ST_STRING_DQ
     movzx eax, byte [r12 + r14]
@@ -1992,7 +2084,7 @@ highlight_line:
     jmp .hl_char_loop
 
 .hl_start_string_sq:
-    mov al, COL_STRING
+    movzx eax, byte [th_string]
     call out_color
     mov r15, ST_STRING_SQ
     movzx eax, byte [r12 + r14]
@@ -2046,7 +2138,7 @@ highlight_line:
 
 ; ── Comment handling ──
 .hl_start_line_comment:
-    mov al, COL_COMMENT
+    movzx eax, byte [th_comment]
     call out_color
     mov r15, ST_COMMENT_LINE
     jmp .hl_char_loop
@@ -2071,7 +2163,7 @@ highlight_line:
     jmp .hl_char_loop
 
 .hl_start_block_comment:
-    mov al, COL_COMMENT
+    movzx eax, byte [th_comment]
     call out_color
     mov r15, ST_COMMENT_BLOCK
     jmp .hl_in_block_comment
@@ -2125,7 +2217,7 @@ highlight_line:
 
 ; ── Number handling ──
 .hl_start_number:
-    mov al, COL_NUMBER
+    movzx eax, byte [th_number]
     call out_color
 .hl_number_loop:
     cmp r14, r13
@@ -2166,7 +2258,7 @@ highlight_line:
 .hl_emit_keyword:
     ; rax = keyword length
     push rax
-    mov al, COL_KEYWORD
+    movzx eax, byte [th_keyword]
     call out_color
     pop rcx
 .hl_kw_emit:
@@ -2186,7 +2278,7 @@ highlight_line:
 ; ── Type handling ──
 .hl_emit_type:
     push rax
-    mov al, COL_TYPE
+    movzx eax, byte [th_type]
     call out_color
     pop rcx
 .hl_tp_emit:
@@ -2206,7 +2298,7 @@ highlight_line:
 ; ── Function call handling ──
 .hl_emit_func:
     push rax
-    mov al, COL_FUNC
+    movzx eax, byte [th_func]
     call out_color
     pop rcx
 .hl_fn_emit:
@@ -2227,7 +2319,7 @@ highlight_line:
 .hl_emit_operator:
     ; rax = operator length (1 or 2)
     push rax
-    mov al, COL_OPERATOR
+    movzx eax, byte [th_punct]
     call out_color
     pop rcx
 .hl_op_emit:
@@ -2246,7 +2338,7 @@ highlight_line:
 
 ; ── Preprocessor line handling ──
 .hl_preproc_line:
-    mov al, COL_PREPROC
+    movzx eax, byte [th_preproc]
     call out_color
 .hl_preproc_loop:
     cmp r14, r13
@@ -3070,6 +3162,71 @@ get_term_size:
 .gts_move:    db 27, "[9999;9999H"  ; move to bottom-right corner
 .gts_move_len equ $ - .gts_move
 .gts_query:   db 27, "[6n"          ; query cursor position
+
+; ══════════════════════════════════════════════════════════════════════
+; Theme initialization
+; ══════════════════════════════════════════════════════════════════════
+
+; Set default theme (monokai)
+init_default_theme:
+    lea rsi, [theme_data]    ; monokai is first entry
+    jmp apply_theme
+
+; Set theme by name. rdi = theme name string
+set_theme:
+    push rbx
+    push r12
+    mov r12, rdi
+    lea rbx, [theme_names]
+    xor ecx, ecx             ; theme index
+.st_loop:
+    mov rdi, [rbx]
+    test rdi, rdi
+    jz .st_default            ; not found, use default
+    push rcx
+    push rbx
+    mov rsi, rdi
+    mov rdi, r12
+    call strcmp
+    pop rbx
+    pop rcx
+    test rax, rax
+    jz .st_found
+    add rbx, 8
+    inc ecx
+    jmp .st_loop
+.st_found:
+    ; Theme index in ecx, each theme is 8 bytes
+    imul eax, ecx, 8
+    lea rsi, [theme_data + rax]
+    pop r12
+    pop rbx
+    jmp apply_theme
+.st_default:
+    lea rsi, [theme_data]    ; monokai
+    pop r12
+    pop rbx
+    jmp apply_theme
+
+; Apply theme from data at rsi (8 bytes: kw, str, cmt, num, typ, func, prep, punct)
+apply_theme:
+    movzx eax, byte [rsi]
+    mov [th_keyword], al
+    movzx eax, byte [rsi + 1]
+    mov [th_string], al
+    movzx eax, byte [rsi + 2]
+    mov [th_comment], al
+    movzx eax, byte [rsi + 3]
+    mov [th_number], al
+    movzx eax, byte [rsi + 4]
+    mov [th_type], al
+    movzx eax, byte [rsi + 5]
+    mov [th_func], al
+    movzx eax, byte [rsi + 6]
+    mov [th_preproc], al
+    movzx eax, byte [rsi + 7]
+    mov [th_punct], al
+    ret
 
 ; ══════════════════════════════════════════════════════════════════════
 ; String utilities
