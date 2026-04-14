@@ -3044,10 +3044,10 @@ get_term_size:
     lea rdx, [rsp]
     syscall
     test rax, rax
-    js .gts_try_ansi
+    js .gts_try_stderr
     movzx eax, word [rsp + 2]
     cmp eax, 2
-    jl .gts_try_ansi
+    jl .gts_try_stderr
 .gts_ioctl_ok:
     movzx eax, word [rsp]
     test eax, eax
@@ -3057,6 +3057,27 @@ get_term_size:
     mov [term_rows], rax
     movzx eax, word [rsp + 2]
     mov [term_cols], rax
+    add rsp, 8
+    pop r12
+    pop rbx
+    ret
+
+.gts_try_stderr:
+    ; Try stderr (fd 2)
+    mov rax, SYS_IOCTL
+    mov rdi, 2
+    mov esi, TIOCGWINSZ
+    lea rdx, [rsp]
+    syscall
+    test rax, rax
+    js .gts_defaults
+    movzx eax, word [rsp + 2]
+    cmp eax, 2
+    jge .gts_ioctl_ok
+.gts_defaults:
+    ; Use sensible defaults
+    mov qword [term_rows], 50
+    mov qword [term_cols], 80
     add rsp, 8
     pop r12
     pop rbx
