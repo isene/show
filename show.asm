@@ -25,7 +25,7 @@
 %define MAP_PRIVATE     2
 %define TCGETS          0x5401
 %define TCSETSW         0x5403
-%define TIOCGWINSZ      0x5427
+%define TIOCGWINSZ      0x5413
 %define ICANON          0x2
 %define ECHO            0x8
 %define ISIG            0x1
@@ -136,7 +136,7 @@ err_open_len    equ $ - err_open
 err_mmap:       db "show: mmap failed", 10
 err_mmap_len    equ $ - err_mmap
 
-version_str:    db "show 0.1.0", 10
+version_str:    db "show 0.1.1", 10
 version_str_len equ $ - version_str
 
 ; Separator for line numbers
