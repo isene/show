@@ -516,6 +516,7 @@ theme_data:
 .td_plain:     db 252, 252, 245, 252, 252, 252, 252, 245
 
 flag_theme: db "--theme", 0
+flag_raw:   db "--raw", 0
 
 ; Operator characters (null-terminated)
 op_chars: db "=+-*/<>!&|^~%", 0
@@ -593,6 +594,17 @@ search_active:      resq 1
 ; Output buffer
 out_buf:            resb OUT_BUF_SIZE
 out_pos:            resq 1
+; When out_safe = 1, out_char neutralises bytes that would let a
+; malicious file inject terminal escape sequences (ESC and the
+; eight-bit C1 controls 0x90/0x9B/0x9D/0x9E/0x9F). Show's own
+; ANSI emissions wrap their writes with out_safe = 0 so colour
+; codes still pass through verbatim.
+out_safe:           resb 1
+; tty_out is set at startup if fd 1 is a character device. When 0
+; (output is redirected to a file or pipe) sanitization is skipped
+; so a captured `show foo.c > foo.ansi` keeps the colour escapes.
+; --raw on the command line forces tty_out = 0.
+tty_out:            resb 1
 
 ; Render scratch
 num_buf:            resb 32
@@ -609,11 +621,60 @@ _start:
     ; Initialize default theme (monokai)
     call init_default_theme
 
+    ; Probe stdout: if it's a character device (terminal) enable
+    ; file-byte sanitization so a malicious file viewed via show
+    ; can't inject terminal escape sequences into the parent shell.
+    ; struct stat is 144 bytes; we only need st_mode at offset 24.
+    sub rsp, 144
+    mov rax, SYS_FSTAT
+    mov rdi, 1                  ; stdout
+    mov rsi, rsp
+    syscall
+    test rax, rax
+    js .start_no_tty_probe
+    mov eax, [rsp + 24]         ; st_mode
+    and eax, 0xF000             ; S_IFMT
+    cmp eax, 0x2000             ; S_IFCHR
+    jne .start_no_tty_probe
+    mov byte [tty_out], 1
+.start_no_tty_probe:
+    add rsp, 144
+
     ; Parse arguments
     mov rdi, [rsp]          ; argc
     lea rsi, [rsp + 8]      ; argv
     cmp rdi, 1
     jle .check_stdin
+
+    ; Scan for --raw (overrides tty probe). Must run before --theme
+    ; because we want the override applied regardless of arg order.
+    push rdi
+    push rsi
+    mov rcx, 1
+.scan_raw:
+    cmp rcx, rdi
+    jge .scan_raw_done
+    mov rax, [rsi + rcx*8]
+    test rax, rax
+    jz .scan_raw_done
+    push rcx
+    push rdi
+    push rsi
+    mov rdi, rax
+    lea rsi, [flag_raw]
+    call strcmp
+    pop rsi
+    pop rdi
+    pop rcx
+    test rax, rax
+    jnz .scan_raw_next
+    mov byte [tty_out], 0
+.scan_raw_next:
+    inc rcx
+    jmp .scan_raw
+.scan_raw_done:
+    pop rsi
+    pop rdi
 
     ; Scan all argv for --theme before other processing
     push rdi
@@ -673,6 +734,25 @@ _start:
     jz .check_stdin
     jmp .have_filename_direct
 .not_theme_arg:
+    ; Skip a leading --raw (already consumed by the scan above).
+    ; --raw takes no value so the filename is at argv[2].
+    mov rax, [rsi + 8]
+    push rdi
+    push rsi
+    mov rdi, rax
+    lea rsi, [flag_raw]
+    call strcmp
+    pop rsi
+    pop rdi
+    test rax, rax
+    jnz .not_raw_arg
+    cmp rdi, 3
+    jl .check_stdin
+    mov rax, [rsi + 16]
+    test rax, rax
+    jz .check_stdin
+    jmp .have_filename_direct
+.not_raw_arg:
     mov rax, [rsi + 8]      ; reload argv[1]
 
     ; Check for --version
@@ -1234,14 +1314,35 @@ out_flush:
     pop rbx
     ret
 
-; Append byte in al
+; Append byte in al. When out_safe = 1, ESC and 8-bit C1 controls
+; (DCS / CSI / OSC / PM / APC introducers) are replaced with '?'
+; so a malicious file can't sneak terminal escape sequences past
+; show into the parent terminal.
 out_char:
+    cmp byte [out_safe], 0
+    je .oc_store
+    cmp al, 0x1B                ; ESC
+    je .oc_neutralise
+    cmp al, 0x90                ; DCS
+    je .oc_neutralise
+    cmp al, 0x9B                ; CSI
+    je .oc_neutralise
+    cmp al, 0x9D                ; OSC
+    je .oc_neutralise
+    cmp al, 0x9E                ; PM
+    je .oc_neutralise
+    cmp al, 0x9F                ; APC
+    je .oc_neutralise
+.oc_store:
     mov rcx, [out_pos]
     cmp rcx, OUT_BUF_SIZE - 1
     jge .oc_flush
     mov [out_buf + rcx], al
     inc qword [out_pos]
     ret
+.oc_neutralise:
+    mov al, '?'
+    jmp .oc_store
 .oc_flush:
     push rax
     call out_flush
@@ -1286,12 +1387,15 @@ out_bytes:
     pop rbx
     ret
 
-; Append ESC[38;5;XXXm for 256-color in al
+; Append ESC[38;5;XXXm for 256-color in al. show's own ANSI must
+; bypass the file-byte sanitizer or every colour escape would be
+; replaced with '?'. Save out_safe, disable, emit, restore.
 out_color:
     push rbx
     push r12
     movzx r12d, al
-    ; ESC[38;5;
+    mov bl, [out_safe]
+    mov byte [out_safe], 0
     mov al, 27
     call out_char
     mov al, '['
@@ -1306,25 +1410,29 @@ out_color:
     call out_char
     mov al, ';'
     call out_char
-    ; Number
     mov rax, r12
     lea rdi, [num_buf]
     call itoa
     mov rdx, rax
     lea rsi, [num_buf]
     call out_bytes
-    ; 'm'
     mov al, 'm'
     call out_char
+    mov [out_safe], bl
     pop r12
     pop rbx
     ret
 
 ; Append reset sequence
 out_reset_color:
+    push rbx
+    mov bl, [out_safe]
+    mov byte [out_safe], 0
     lea rsi, [reset_seq]
     mov rdx, reset_seq_len
     call out_bytes
+    mov [out_safe], bl
+    pop rbx
     ret
 
 ; ══════════════════════════════════════════════════════════════════════
@@ -1945,6 +2053,15 @@ highlight_line:
     push r14
     push r15
 
+    ; Stash and enable file-byte sanitization (only when stdout is
+    ; actually a terminal — pipes / file redirects keep the raw
+    ; bytes so `show foo > foo.ansi` still produces a valid colour
+    ; capture).
+    movzx ebx, byte [out_safe]
+    push rbx
+    movzx ebx, byte [tty_out]
+    mov [out_safe], bl
+
     mov r12, rsi             ; line start
     mov r13, rcx             ; line length
     xor r14, r14             ; current position in line
@@ -2394,6 +2511,10 @@ highlight_line:
     mov r15, ST_NORMAL
 .hl_save_state:
     mov [hl_state], r15
+
+    ; Restore previous out_safe value (pushed at function entry).
+    pop rbx
+    mov [out_safe], bl
 
     pop r15
     pop r14
