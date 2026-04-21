@@ -890,8 +890,10 @@ _start:
     jmp .do_cat
 
 .do_pipe_or_pager:
-    cmp qword [stdout_is_tty], 1
-    je .do_pager
+    ; Stdin is a pipe — always cat-render. The pager reads keystrokes
+    ; from fd 0, but fd 0 is the upstream pipe so there's no way for
+    ; the user to drive it; previously this hung or dropped output
+    ; entirely (e.g. `apt-cache search chrome | show`).
     jmp .do_cat
 
 .do_pane:
