@@ -97,12 +97,16 @@ Colors match the [pointer](https://github.com/isene/pointer) file manager's buil
 
 **Pane mode** (`--lines M-N`): outputs a specific line range with highlighting. No raw mode, no key handling. Designed for embedding in TUI applications like [pointer](https://github.com/isene/pointer) and [RTFM](https://github.com/isene/RTFM).
 
-## Part of CHasm (CHange to ASM)
+## Part of [CHasm](https://github.com/isene/chasm) (CHange to ASM)
 
-| Tool | Purpose | Binary | Suite |
-|------|---------|--------|-------|
-| **[show](https://github.com/isene/show)** | **File viewer** | **38KB** | **CHasm** |
-| [bare](https://github.com/isene/bare) | Interactive shell | 130KB | CHasm |
+| Tool | Purpose | Binary |
+|------|---------|--------|
+| **[show](https://github.com/isene/show)** | **File viewer** | **40KB** |
+| [bare](https://github.com/isene/bare)     | Interactive shell | 150KB |
+| [glass](https://github.com/isene/glass)   | Terminal emulator | 110KB |
+| [tile](https://github.com/isene/tile)     | Window manager + strip status bar | 70KB |
+| [chasm-bits](https://github.com/isene/chasm-bits) | Status-bar asmites | ~5KB each |
+| [glyph](https://github.com/isene/glyph)   | TrueType rasterizer | 37KB |
 
 ## License
 
