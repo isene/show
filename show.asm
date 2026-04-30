@@ -136,7 +136,7 @@ err_open_len    equ $ - err_open
 err_mmap:       db "show: mmap failed", 10
 err_mmap_len    equ $ - err_mmap
 
-version_str:    db "show 0.1.2", 10
+version_str:    db "show 0.1.3", 10
 version_str_len equ $ - version_str
 
 ; Separator for line numbers
@@ -1826,6 +1826,87 @@ run_pager:
     ret
 
 ; ══════════════════════════════════════════════════════════════════════
+; compute_line_vrows — given line bytes [rsi, rsi+rcx), return rax =
+; number of visual rows the line will occupy under terminal soft-wrap
+; (rounded up, minimum 1). UTF-8 continuation bytes don't count; tabs
+; advance to the next 8-column stop.
+;
+; Effective width = term_cols minus the line-number prefix when line
+; numbers are shown. We treat the prefix as eating from EVERY row's
+; budget — slight over-count vs. reality (continuation rows have no
+; prefix and could be wider), but err on the side of leaving a blank
+; row instead of the line overflowing into the status bar.
+; ══════════════════════════════════════════════════════════════════════
+compute_line_vrows:
+    push rbx
+    push r8
+    push r9
+    push r10
+
+    mov r10, rsi
+    add r10, rcx                ; r10 = end pointer
+
+    mov rbx, [term_cols]
+    cmp qword [show_line_numbers], 0
+    je .cv_have_cols
+    mov rax, [lineno_width]
+    add rax, 3                  ; " | " separator
+    sub rbx, rax
+.cv_have_cols:
+    test rbx, rbx
+    jle .cv_one                 ; degenerate term too narrow
+
+    xor r8, r8                  ; col on current row
+    mov r9, 1                   ; rows so far
+.cv_loop:
+    cmp rsi, r10
+    jge .cv_done
+    movzx eax, byte [rsi]
+    inc rsi
+    ; Skip UTF-8 continuation bytes (0x80..0xBF)
+    cmp al, 0x80
+    jb .cv_visible
+    cmp al, 0xC0
+    jb .cv_loop
+.cv_visible:
+    cmp al, 9                   ; tab → next 8-column stop
+    jne .cv_normal
+    or r8, 7
+    inc r8
+    jmp .cv_check
+.cv_normal:
+    inc r8
+.cv_check:
+    cmp r8, rbx
+    jl .cv_loop
+    inc r9
+    xor r8, r8
+    jmp .cv_loop
+.cv_done:
+    mov rax, r9
+    test r8, r8
+    jnz .cv_ret
+    ; Last char wrapped exactly to a row boundary — that row counted
+    ; via the inc r9 above but no content was drawn on it. Don't
+    ; subtract: a line of exactly N×width still occupies N rows.
+    cmp rax, 1
+    jle .cv_ret
+    dec rax
+.cv_ret:
+    pop r10
+    pop r9
+    pop r8
+    pop rbx
+    ret
+.cv_one:
+    mov rax, 1
+    pop r10
+    pop r9
+    pop r8
+    pop rbx
+    ret
+
+; ══════════════════════════════════════════════════════════════════════
 ; Screen rendering (pager mode)
 ; ══════════════════════════════════════════════════════════════════════
 render_screen:
@@ -1852,9 +1933,51 @@ render_screen:
     cmp r12, [line_count]
     jge .rs_empty_line
 
-    ; Line number
+    ; --- Compute line bounds (rsi=start, rcx=length excluding trailing \n) ---
+    mov rsi, [line_offsets + r12*8]
+    add rsi, [file_buf]
+    mov rax, r12
+    inc rax
+    cmp rax, [line_count]
+    jge .rs_compute_last
+    mov rcx, [line_offsets + rax*8]
+    sub rcx, [line_offsets + r12*8]
+    test rcx, rcx
+    jz .rs_have_bounds
+    dec rcx
+    jmp .rs_have_bounds
+.rs_compute_last:
+    mov rcx, [file_size]
+    sub rcx, [line_offsets + r12*8]
+    test rcx, rcx
+    jz .rs_have_bounds
+    push rsi
+    add rsi, rcx
+    dec rsi
+    cmp byte [rsi], 10
+    pop rsi
+    jne .rs_have_bounds
+    dec rcx
+.rs_have_bounds:
+
+    ; --- Compute visual rows the line will occupy under terminal soft-wrap.
+    ;     Stop the render loop if the line won't fully fit in the remaining
+    ;     budget — the remaining rows are filled with `~` placeholders so
+    ;     the status bar always lands on the bottom row. ---
+    push rsi
+    push rcx
+    call compute_line_vrows
+    pop rcx
+    pop rsi
+    cmp rax, r14
+    jg .rs_overflow_fill
+    push rax                         ; save vrows across rendering
+
+    ; --- Line number prefix (if enabled) ---
+    push rsi
+    push rcx
     cmp qword [show_line_numbers], 0
-    je .rs_no_ln
+    je .rs_no_ln_pop
     mov al, COL_LINENO
     call out_color
     mov rax, r12
@@ -1880,46 +2003,45 @@ render_screen:
     lea rsi, [lineno_sep]
     mov rdx, lineno_sep_len
     call out_bytes
-.rs_no_ln:
-
-    ; Get line data
-    mov rsi, [line_offsets + r12*8]
-    add rsi, [file_buf]
-    mov rax, r12
-    inc rax
-    cmp rax, [line_count]
-    jge .rs_last
-    mov rcx, [line_offsets + rax*8]
-    sub rcx, [line_offsets + r12*8]
-    test rcx, rcx
-    jz .rs_hl
-    dec rcx
-    jmp .rs_hl
-.rs_last:
-    mov rcx, [file_size]
-    sub rcx, [line_offsets + r12*8]
-    test rcx, rcx
-    jz .rs_hl
-    push rsi
-    add rsi, rcx
-    dec rsi
-    cmp byte [rsi], 10
+.rs_no_ln_pop:
+    pop rcx
     pop rsi
-    jne .rs_hl
-    dec rcx
-.rs_hl:
+
+    ; --- Highlight + emit line content + EOL ---
     call highlight_line
     call out_reset_color
-    ; Clear to end of line
     lea rsi, [clr_eol]
     mov rdx, clr_eol_len
     call out_bytes
     mov al, 10
     call out_char
 
+    pop rax                          ; restore vrows
+    sub r14, rax                     ; consume the rows the line occupied
     inc r12
-    dec r14
     jmp .rs_line_loop
+
+.rs_overflow_fill:
+    ; The next logical line needs more visual rows than the remaining
+    ; budget. Don't render it (would overflow into the status bar);
+    ; fill remaining rows with `~` and exit to the status bar. r12 is
+    ; left pointing at the first not-rendered line so end_line in the
+    ; status bar correctly reflects how far we got.
+.rs_of_loop:
+    test r14, r14
+    jle .rs_status_bar
+    mov al, COL_LINENO
+    call out_color
+    mov al, '~'
+    call out_char
+    call out_reset_color
+    lea rsi, [clr_eol]
+    mov rdx, clr_eol_len
+    call out_bytes
+    mov al, 10
+    call out_char
+    dec r14
+    jmp .rs_of_loop
 
 .rs_empty_line:
     ; Past end of file: show ~
