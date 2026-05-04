@@ -1089,7 +1089,7 @@ build_line_index:
     ; First line starts at offset 0
     mov qword [line_offsets], 0
     mov qword [line_count], 1
-    xor r12, r12             ; current offset
+    xor r12d, r12d             ; current offset
 
 .bli_scan:
     cmp r12, rcx
@@ -1449,7 +1449,7 @@ render_cat:
     mov qword [hl_state], ST_NORMAL
     mov qword [show_line_numbers], 1
 
-    xor r12, r12             ; line index
+    xor r12d, r12d             ; line index
 .rc_loop:
     cmp r12, [line_count]
     jge .rc_done
@@ -1498,7 +1498,6 @@ render_cat:
     mov rcx, [line_offsets + rax*8]
     sub rcx, [line_offsets + r12*8]
     ; Strip trailing newline
-    test rcx, rcx
     jz .rc_highlight
     dec rcx
     jmp .rc_highlight
@@ -1506,7 +1505,6 @@ render_cat:
     mov rcx, [file_size]
     sub rcx, [line_offsets + r12*8]
     ; Strip trailing newline if present
-    test rcx, rcx
     jz .rc_highlight
     push rsi
     add rsi, rcx
@@ -1556,7 +1554,7 @@ render_pane:
     mov r12, [pane_start_line]
     test r12, r12
     jnz .rp_have_start
-    xor r12, r12
+    xor r12d, r12d
     jmp .rp_start_set
 .rp_have_start:
     dec r12                  ; 1-indexed to 0-indexed
@@ -1584,14 +1582,12 @@ render_pane:
     jge .rp_last
     mov rcx, [line_offsets + rax*8]
     sub rcx, [line_offsets + r12*8]
-    test rcx, rcx
     jz .rp_hl
     dec rcx
     jmp .rp_hl
 .rp_last:
     mov rcx, [file_size]
     sub rcx, [line_offsets + r12*8]
-    test rcx, rcx
     jz .rp_hl
     push rsi
     add rsi, rcx
@@ -1754,7 +1750,6 @@ run_pager:
     mov rcx, [term_rows]
     dec rcx
     sub rax, rcx
-    test rax, rax
     jns .pg_pgup_ok
     xor eax, eax
 .pg_pgup_ok:
@@ -1856,7 +1851,7 @@ compute_line_vrows:
     test rbx, rbx
     jle .cv_one                 ; degenerate term too narrow
 
-    xor r8, r8                  ; col on current row
+    xor r8d, r8d                  ; col on current row
     mov r9, 1                   ; rows so far
 .cv_loop:
     cmp rsi, r10
@@ -1880,7 +1875,7 @@ compute_line_vrows:
     cmp r8, rbx
     jl .cv_loop
     inc r9
-    xor r8, r8
+    xor r8d, r8d
     jmp .cv_loop
 .cv_done:
     mov rax, r9
@@ -1942,14 +1937,12 @@ render_screen:
     jge .rs_compute_last
     mov rcx, [line_offsets + rax*8]
     sub rcx, [line_offsets + r12*8]
-    test rcx, rcx
     jz .rs_have_bounds
     dec rcx
     jmp .rs_have_bounds
 .rs_compute_last:
     mov rcx, [file_size]
     sub rcx, [line_offsets + r12*8]
-    test rcx, rcx
     jz .rs_have_bounds
     push rsi
     add rsi, rcx
@@ -2071,7 +2064,7 @@ render_screen:
     call out_bytes
 
     ; Track column position in r13
-    xor r13, r13
+    xor r13d, r13d
 
     ; Filename
     lea rdi, [file_path]
@@ -2188,7 +2181,7 @@ highlight_line:
 
     mov r12, rsi             ; line start
     mov r13, rcx             ; line length
-    xor r14, r14             ; current position in line
+    xor r14d, r14d             ; current position in line
     mov r15, [hl_state]      ; highlight state
 
     ; No language? Just output plain
@@ -3351,7 +3344,7 @@ get_term_size:
     syscall
     ; Read response
     lea rbx, [tmp_buf]
-    xor r12, r12
+    xor r12d, r12d
 .gts_read_resp:
     mov rax, SYS_READ
     xor edi, edi
