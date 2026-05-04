@@ -2131,7 +2131,6 @@ render_screen:
     sub rax, r13
     sub rax, 12
     ; Clamp to 0 minimum
-    test rax, rax
     jle .rs_sb_no_pad
     mov rcx, rax
 .rs_sb_pad:
