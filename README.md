@@ -2,7 +2,7 @@
 
 <img src="img/show.svg" align="left" width="150" height="150">
 
-![Version](https://img.shields.io/badge/version-0.1.3-blue) ![Assembly](https://img.shields.io/badge/language-x86__64%20Assembly-purple) ![License](https://img.shields.io/badge/license-Unlicense-green) ![Platform](https://img.shields.io/badge/platform-Linux%20x86__64-blue) ![Dependencies](https://img.shields.io/badge/dependencies-none-brightgreen) ![Binary](https://img.shields.io/badge/binary-~38KB-orange)
+![Version](https://img.shields.io/badge/version-0.1.4-blue) ![Assembly](https://img.shields.io/badge/language-x86__64%20Assembly-purple) ![License](https://img.shields.io/badge/license-Unlicense-green) ![Platform](https://img.shields.io/badge/platform-Linux%20x86__64-blue) ![Dependencies](https://img.shields.io/badge/dependencies-none-brightgreen) ![Binary](https://img.shields.io/badge/binary-~38KB-orange)
 
 File viewer with syntax highlighting, written in x86_64 Linux assembly. No libc, no runtime, pure syscalls. Single static binary, 38KB.
 
@@ -24,7 +24,7 @@ sudo make install
 ```bash
 show file.rb              # full-screen pager (if stdout is a terminal)
 show file.py | grep def   # cat mode with colors (if stdout is a pipe)
-echo "hello" | show       # pipe mode (reads stdin)
+echo "hello" | show       # pipe mode (reads stdin, pages like less)
 show --lines 10-30 file.c # pane mode (for embedding in TUI apps)
 ```
 
@@ -94,6 +94,8 @@ Colors match the [pointer](https://github.com/isene/pointer) file manager's buil
 **Pager mode** (default when stdout is a terminal): full-screen with scrolling, status bar, and line numbers. Uses alternate screen buffer.
 
 **Cat mode** (when stdout is a pipe): outputs all lines with syntax highlighting and line numbers. Works like `bat` or `cat` with colors.
+
+**Piped input** (`cmd | show`): stdin is slurped, then show reopens `/dev/tty` for the keyboard and runs the full pager — the same trick `less` uses. If stdout is also piped (or there is no controlling terminal), it falls back to cat mode.
 
 **Pane mode** (`--lines M-N`): outputs a specific line range with highlighting. No raw mode, no key handling. Designed for embedding in TUI applications like [pointer](https://github.com/isene/pointer) and [RTFM](https://github.com/isene/RTFM).
 

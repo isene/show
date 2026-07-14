@@ -9,6 +9,7 @@
 %define SYS_WRITE       1
 %define SYS_OPEN        2
 %define SYS_CLOSE       3
+%define SYS_DUP2        33
 %define SYS_FSTAT       5
 %define SYS_MMAP        9
 %define SYS_MUNMAP      11
@@ -129,6 +130,7 @@ alt_screen_on_len equ $ - alt_screen_on
 alt_screen_off: db 27, "[?1049l"
 alt_screen_off_len equ $ - alt_screen_off
 
+str_dev_tty:    db "/dev/tty", 0
 err_usage:      db "Usage: show [--lines M-N] [--width W] [file]", 10
 err_usage_len   equ $ - err_usage
 err_open:       db "show: cannot open file: "
@@ -890,11 +892,31 @@ _start:
     jmp .do_cat
 
 .do_pipe_or_pager:
-    ; Stdin is a pipe — always cat-render. The pager reads keystrokes
-    ; from fd 0, but fd 0 is the upstream pipe so there's no way for
-    ; the user to drive it; previously this hung or dropped output
-    ; entirely (e.g. `apt-cache search chrome | show`).
-    jmp .do_cat
+    ; Stdin was a pipe and is fully slurped into pipe_buf. If stdout is
+    ; a terminal, reopen /dev/tty as fd 0 so the pager has a keyboard —
+    ; the same trick less uses. (The pager's termios/size/key reads all
+    ; target fd 0, so nothing else changes.) Cat-render remains for
+    ; stdout-not-a-tty (further piped) and no-controlling-tty (cron),
+    ; where a pager can't run; the old always-cat behavior existed
+    ; because driving the pager from the upstream pipe hung it.
+    cmp qword [stdout_is_tty], 1
+    jne .do_cat
+    mov rax, SYS_OPEN
+    lea rdi, [str_dev_tty]
+    xor esi, esi                       ; O_RDONLY
+    xor edx, edx
+    syscall
+    test rax, rax
+    js .do_cat                         ; no controlling tty → dump
+    mov rbx, rax
+    mov rdi, rax
+    xor esi, esi
+    mov rax, SYS_DUP2                  ; dup2(ttyfd, 0)
+    syscall
+    mov rdi, rbx
+    mov rax, SYS_CLOSE                 ; drop the extra fd
+    syscall
+    jmp .do_pager
 
 .do_pane:
     call render_pane
