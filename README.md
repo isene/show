@@ -37,6 +37,22 @@ updates as the file changes.
   of other files never interrupts it.
 - Piped input (`cmd | show`) has no file to follow and is unchanged.
 
+### As a `tail -f`
+
+```bash
+show /var/log/syslog       # then press G
+```
+
+`G` parks you at the end, and from there every append scrolls into view,
+with syntax colours and the pager's search and navigation still available.
+Press `g` (or scroll up) to stop following and read back through the file:
+appends keep arriving, but the view stays where you put it. `G` again to
+resume following.
+
+Unlike `tail -f` this costs nothing while the file is quiet, and unlike
+`less +F` you are never locked out of the pager: the keyboard stays live
+the whole time.
+
 ## Usage
 
 ```bash
@@ -44,6 +60,7 @@ show file.rb              # full-screen pager (if stdout is a terminal)
 show file.py | grep def   # cat mode with colors (if stdout is a pipe)
 echo "hello" | show       # pipe mode (reads stdin, pages like less)
 show --lines 10-30 file.c # pane mode (for embedding in TUI apps)
+show /var/log/syslog      # live view; press G to follow it like tail -f
 ```
 
 ## Screenshot
