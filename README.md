@@ -2,7 +2,7 @@
 
 <img src="img/show.svg" align="left" width="150" height="150">
 
-![Version](https://img.shields.io/badge/version-0.1.4-blue) ![Assembly](https://img.shields.io/badge/language-x86__64%20Assembly-purple) ![License](https://img.shields.io/badge/license-Unlicense-green) ![Platform](https://img.shields.io/badge/platform-Linux%20x86__64-blue) ![Dependencies](https://img.shields.io/badge/dependencies-none-brightgreen) ![Binary](https://img.shields.io/badge/binary-~38KB-orange)
+![Version](https://img.shields.io/badge/version-0.1.5-blue) ![Assembly](https://img.shields.io/badge/language-x86__64%20Assembly-purple) ![License](https://img.shields.io/badge/license-Unlicense-green) ![Platform](https://img.shields.io/badge/platform-Linux%20x86__64-blue) ![Dependencies](https://img.shields.io/badge/dependencies-none-brightgreen) ![Binary](https://img.shields.io/badge/binary-~38KB-orange)
 
 File viewer with syntax highlighting, written in x86_64 Linux assembly. No libc, no runtime, pure syscalls. Single static binary, 38KB.
 
@@ -18,6 +18,24 @@ cd show
 make
 sudo make install
 ```
+
+
+## Live reload
+
+`show` follows a file that other processes rewrite. Leave it open on a log,
+a generated report or a file you are editing in another window, and the view
+updates as the file changes.
+
+- Written in place, or replaced atomically (write temp, rename over): both
+  are picked up. The second is what vim, scribe and the CHasm config tools
+  do, and it orphans a naive watch, so the watch re-arms on the path.
+- Parked at the bottom, it stays at the bottom, so a growing file follows
+  like `tail -f`. Anywhere else, your position is kept.
+- Costs nothing when nothing happens: an inotify fd joins the keyboard in a
+  single blocking `poll`, so an idle pager makes no wakeups at all. The
+  watch is on the file itself, not its directory, so a busy directory full
+  of other files never interrupts it.
+- Piped input (`cmd | show`) has no file to follow and is unchanged.
 
 ## Usage
 

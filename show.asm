@@ -13,6 +13,18 @@
 %define SYS_FSTAT       5
 %define SYS_MMAP        9
 %define SYS_MUNMAP      11
+%define SYS_POLL              7
+%define SYS_INOTIFY_INIT1     294
+%define SYS_INOTIFY_ADD_WATCH 254
+%define IN_MODIFY             0x00000002
+%define IN_ATTRIB             0x00000004
+%define IN_CLOSE_WRITE        0x00000008
+%define IN_MOVED_TO           0x00000080
+%define IN_CREATE             0x00000100
+%define IN_DELETE_SELF        0x00000400
+%define IN_MOVE_SELF          0x00000800
+%define IN_NONBLOCK           0x00000800
+%define IN_CLOEXEC            0x00080000
 %define SYS_IOCTL       16
 %define SYS_EXIT        60
 %define SYS_RT_SIGACTION 13
@@ -138,7 +150,7 @@ err_open_len    equ $ - err_open
 err_mmap:       db "show: mmap failed", 10
 err_mmap_len    equ $ - err_mmap
 
-version_str:    db "show 0.1.3", 10
+version_str:    db "show 0.1.5", 10
 version_str_len equ $ - version_str
 
 ; Separator for line numbers
@@ -564,6 +576,13 @@ left_col:           resq 1
 show_line_numbers:  resq 1
 lineno_width:       resq 1
 
+; Live reload (inotify on the shown file; -1 = not watching)
+watch_fd:           resq 1
+watch_dir_wd:       resq 1
+watch_base:         resq 1          ; offset of the basename inside file_path
+watch_poll:         resb 16         ; two struct pollfd
+watch_evbuf:        resb 4096
+
 ; Pane mode params
 pane_start_line:    resq 1
 pane_end_line:      resq 1
@@ -941,6 +960,189 @@ _start:
     mov rdi, 1
     mov rax, SYS_EXIT
     syscall
+
+
+; ══════════════════════════════════════════════════════════════════════
+; Live reload — follow a file that other processes rewrite
+; ══════════════════════════════════════════════════════════════════════
+;
+; Event-driven, never polled: an inotify fd joins the keyboard in one
+; poll(), so an idle pager costs exactly what it did before (blocked in a
+; syscall, zero wakeups). Watching the DIRECTORY rather than the file is
+; deliberate — editors and every CHasm conf app save by writing a temp
+; file and renaming it over the target, which leaves a watch on the file
+; itself pinned to the old, now-orphaned inode. The directory sees the
+; rename and we re-open by path.
+
+; watch_init — arm the watch. No-op for piped input (nothing to follow).
+watch_init:
+    push rbx
+    mov qword [watch_fd], -1
+    cmp qword [mode], MODE_PIPE
+    je .wi_done                        ; stdin pipe: no file to follow
+    cmp byte [file_path], 0
+    je .wi_done
+    mov rax, SYS_INOTIFY_INIT1
+    mov edi, IN_NONBLOCK | IN_CLOEXEC
+    syscall
+    test rax, rax
+    js .wi_done                        ; no inotify → static view, as before
+    mov [watch_fd], rax
+    call watch_arm
+.wi_done:
+    pop rbx
+    ret
+
+; watch_arm — (re)watch the file itself. Watching the file rather than its
+; directory is the difference between waking for OUR file and waking for
+; every neighbour: a busy directory (a build tree, ~, a scratch dir) would
+; otherwise interrupt the pager thousands of times for files it is not
+; showing. The cost is that an atomic replace (write temp, rename over)
+; orphans the watch on the old inode — handled by re-arming when the
+; kernel reports the file moved or was deleted.
+watch_arm:
+    cmp qword [watch_fd], -1
+    je .wm_done
+    mov rax, SYS_INOTIFY_ADD_WATCH
+    mov rdi, [watch_fd]
+    lea rsi, [file_path]
+    mov edx, IN_MODIFY | IN_CLOSE_WRITE | IN_MOVE_SELF | IN_DELETE_SELF | IN_ATTRIB
+    syscall
+    mov [watch_dir_wd], rax
+.wm_done:
+    ret
+
+; wait_input — block until the keyboard has a byte or the file changed.
+; rax = 1 if the file was reloaded (caller should redraw, not read a key),
+; 0 if a keystroke is waiting.
+wait_input:
+    push rbx
+    cmp qword [watch_fd], -1
+    je .wa_key                         ; not watching → read_key blocks as before
+.wa_poll:
+    lea rdi, [watch_poll]
+    xor eax, eax
+    mov [rdi], eax                     ; fd 0 = stdin
+    mov word [rdi + 4], 1              ; POLLIN
+    mov word [rdi + 6], 0
+    mov rax, [watch_fd]
+    mov [rdi + 8], eax
+    mov word [rdi + 12], 1             ; POLLIN
+    mov word [rdi + 14], 0
+    mov rax, SYS_POLL
+    lea rdi, [watch_poll]
+    mov esi, 2
+    mov edx, -1                        ; block indefinitely: no timer, no wakeups
+    syscall
+    cmp rax, -4                        ; EINTR (SIGWINCH) → let the loop redraw
+    je .wa_key
+    test rax, rax
+    jle .wa_key
+    movzx eax, word [watch_poll + 6]   ; stdin revents
+    test eax, 1
+    jnz .wa_key                        ; a keystroke wins; the file event keeps
+                                       ; until the next wait
+    movzx eax, word [watch_poll + 14]  ; inotify revents
+    test eax, 1
+    jz .wa_poll
+    ; Drain the queue — one read covers every event pending. Every event
+    ; here is about our file, so no filtering is needed.
+    mov rax, SYS_READ
+    mov rdi, [watch_fd]
+    lea rsi, [watch_evbuf]
+    mov rdx, 4096
+    syscall
+    test rax, rax
+    jle .wa_poll
+    ; If the file was replaced rather than written in place, our watch now
+    ; points at an orphaned inode: re-arm on the path before reloading.
+    mov rbx, rax                       ; bytes read
+    xor r8, r8
+    xor r9d, r9d                       ; 1 = need re-arm
+.wa_ev:
+    lea rax, [r8 + 16]
+    cmp rax, rbx
+    ja .wa_ev_done
+    mov eax, [watch_evbuf + r8 + 4]    ; mask
+    test eax, IN_MOVE_SELF | IN_DELETE_SELF
+    jz .wa_ev_next
+    mov r9d, 1
+.wa_ev_next:
+    mov ecx, [watch_evbuf + r8 + 12]   ; name length
+    lea r8, [r8 + rcx + 16]
+    jmp .wa_ev
+.wa_ev_done:
+    test r9d, r9d
+    jz .wa_reload
+    call watch_arm
+.wa_reload:
+    call reload_file
+    mov rax, 1
+    pop rbx
+    ret
+.wa_key:
+    xor eax, eax
+    pop rbx
+    ret
+
+; reload_file — re-read the file and keep the reader where they were.
+; Sitting at the bottom pins to the new bottom, so a growing log follows
+; like tail -f; anywhere else keeps the current top line.
+reload_file:
+    push rbx
+    push r12
+    push r13
+    ; Were we parked at the end before the change?
+    xor r13d, r13d                     ; 0 = keep top_line
+    mov rax, [top_line]
+    add rax, [term_rows]
+    cmp rax, [line_count]
+    jb .rf_not_tail
+    mov r13d, 1                        ; at the bottom → follow
+.rf_not_tail:
+    mov rbx, [top_line]
+    ; Drop the old mapping (pipe input never reaches here).
+    mov rax, [file_buf]
+    test rax, rax
+    jz .rf_load
+    mov rdi, rax
+    mov rsi, [file_size]
+    test rsi, rsi
+    jz .rf_load
+    mov rax, SYS_MUNMAP
+    syscall
+.rf_load:
+    call load_file
+    test rax, rax
+    js .rf_done                        ; vanished mid-save: keep showing what
+                                       ; we have, the next event re-reads it
+    call build_line_index
+    ; Restore the viewport against the new length.
+    test r13d, r13d
+    jz .rf_keep_top
+    mov rax, [line_count]
+    sub rax, [term_rows]
+    jns .rf_set_top
+    xor eax, eax
+    jmp .rf_set_top
+.rf_keep_top:
+    mov rax, rbx
+    cmp rax, [line_count]
+    jb .rf_set_top
+    mov rax, [line_count]
+    test rax, rax
+    jz .rf_zero
+    dec rax
+    jmp .rf_set_top
+.rf_zero:
+    xor eax, eax
+.rf_set_top:
+    mov [top_line], rax
+.rf_done:
+    pop r13
+    pop r12
+    pop rbx
+    ret
 
 ; ══════════════════════════════════════════════════════════════════════
 ; File I/O
@@ -1648,6 +1850,8 @@ run_pager:
     push r14
     push r15
 
+    call watch_init          ; live reload: inotify on the shown file
+
     ; Save termios and enter raw mode
     call save_termios
     call enable_raw_mode
@@ -1684,6 +1888,13 @@ run_pager:
 .pg_no_winch:
 
     call render_screen
+
+    ; Wait for a keystroke or a change to the file on disk. Returns 1 when
+    ; the file was reloaded, in which case loop straight back to redraw
+    ; without swallowing a key.
+    call wait_input
+    test rax, rax
+    jnz .pager_loop
 
     ; Read key
     call read_key
