@@ -127,6 +127,10 @@ bold_seq:       db 27, "[1m"
 bold_seq_len    equ $ - bold_seq
 reverse_seq:    db 27, "[7m"
 reverse_seq_len equ $ - reverse_seq
+reverse_off:    db 27, "[27m"
+reverse_off_len equ $ - reverse_off
+search_fail_str: db " pattern not found"
+search_fail_len equ $ - search_fail_str
 clr_eol:        db 27, "[K"
 clr_eol_len     equ $ - clr_eol
 clr_screen:     db 27, "[2J"
@@ -613,6 +617,11 @@ search_len:         resq 1
 search_active:      resq 1
 match_line:         resq 1          ; line holding the current match (-1 none)
 search_nocase:      resb 1          ; 1 when the pattern is all lower case
+search_failed:      resq 1          ; the last search found nothing
+mrange_start:       resq 32         ; match spans within the line being drawn
+mrange_end:         resq 32
+mrange_count:       resq 1
+match_hl_state:     resb 1          ; 1 while reverse video is on mid-line
 
 ; Output buffer
 out_buf:            resb OUT_BUF_SIZE
@@ -1902,6 +1911,7 @@ run_pager:
     ; Read key
     call read_key
     ; rax = key code
+    mov qword [search_failed], 0
 
     cmp rax, 'q'
     je .pager_quit
@@ -2049,7 +2059,10 @@ run_pager:
 .pg_search_run:
     call find_match
     cmp rax, -1
-    je .pg_search_redraw             ; no match — leave the view where it is
+    jne .pg_search_hit
+    mov qword [search_failed], 1     ; say so; leave the view where it is
+    jmp .pg_search_redraw
+.pg_search_hit:
     mov [match_line], rax
     mov [top_line], rax
     ; Don't scroll past the last full screen.
@@ -2213,6 +2226,131 @@ search_prompt:
     mov rax, rbx
     pop rbx
     ret
+
+; ══════════════════════════════════════════════════════════════════════
+; mark_line_matches — rsi = line pointer, rcx = length. Records where the
+; pattern sits in this line so hl_emit can reverse those bytes. Preserves
+; everything, and clears the list when no search is live, which is every
+; line until someone presses /.
+; ══════════════════════════════════════════════════════════════════════
+mark_line_matches:
+    push rax
+    push rbx
+    push rcx
+    push rdx
+    push rsi
+    push r8
+    push r9
+    mov qword [mrange_count], 0
+    mov byte [match_hl_state], 0
+    cmp qword [search_active], 0
+    je .mlm_done
+    mov r8, [search_len]
+    test r8, r8
+    jz .mlm_done
+    cmp rcx, r8
+    jb .mlm_done
+    mov r9, rcx
+    sub r9, r8                       ; last offset a match could start at
+    xor edx, edx
+.mlm_outer:
+    cmp rdx, r9
+    ja .mlm_done
+    xor ebx, ebx
+.mlm_inner:
+    cmp rbx, r8
+    jge .mlm_hit
+    mov rcx, rdx
+    add rcx, rbx
+    movzx eax, byte [rsi + rcx]
+    movzx ecx, byte [search_buf + rbx]
+    cmp byte [search_nocase], 0
+    je .mlm_cmp
+    cmp al, 'A'
+    jb .mlm_cmp
+    cmp al, 'Z'
+    ja .mlm_cmp
+    add al, 32
+.mlm_cmp:
+    cmp al, cl
+    jne .mlm_next
+    inc rbx
+    jmp .mlm_inner
+.mlm_hit:
+    mov rax, [mrange_count]
+    cmp rax, 32
+    jge .mlm_done
+    mov [mrange_start + rax*8], rdx
+    mov rcx, rdx
+    add rcx, r8
+    mov [mrange_end + rax*8], rcx
+    inc qword [mrange_count]
+    add rdx, r8                      ; carry on past this one
+    jmp .mlm_outer
+.mlm_next:
+    inc rdx
+    jmp .mlm_outer
+.mlm_done:
+    pop r9
+    pop r8
+    pop rsi
+    pop rdx
+    pop rcx
+    pop rbx
+    pop rax
+    ret
+
+; ══════════════════════════════════════════════════════════════════════
+; hl_emit — al = the byte at line offset r14. Emits it, turning reverse
+; video on at the start of a match and off at its end. Falls straight
+; through to out_char when the line holds none, which is every line until
+; someone searches.
+; ══════════════════════════════════════════════════════════════════════
+hl_emit:
+    cmp qword [mrange_count], 0
+    je out_char
+    push rax
+    push rbx
+    push rcx
+    push rsi
+    push rdx
+    xor ebx, ebx                     ; 0 = outside every match
+    xor ecx, ecx
+.he_scan:
+    cmp rcx, [mrange_count]
+    jge .he_state
+    mov rax, [mrange_start + rcx*8]
+    cmp r14, rax
+    jb .he_next
+    mov rax, [mrange_end + rcx*8]
+    cmp r14, rax
+    jb .he_in
+.he_next:
+    inc rcx
+    jmp .he_scan
+.he_in:
+    mov ebx, 1
+.he_state:
+    cmp bl, [match_hl_state]
+    je .he_out
+    mov [match_hl_state], bl
+    test bl, bl
+    jz .he_off
+    lea rsi, [reverse_seq]
+    mov rdx, reverse_seq_len
+    call out_raw
+    jmp .he_out
+.he_off:
+    lea rsi, [reverse_off]
+    mov rdx, reverse_off_len
+    call out_raw
+.he_out:
+    pop rdx
+    pop rsi
+    pop rcx
+    pop rbx
+    pop rax
+    jmp out_char
 
 ; ══════════════════════════════════════════════════════════════════════
 ; line_bounds — rdi = line index. rsi = pointer to the line's first byte,
@@ -2525,6 +2663,7 @@ render_screen:
     pop rsi
 
     ; --- Highlight + emit line content + EOL ---
+    call mark_line_matches
     call highlight_line
     call out_reset_color
     lea rsi, [clr_eol]
@@ -2647,6 +2786,15 @@ render_screen:
     lea rsi, [num_buf]
     mov rdx, rax
     call out_bytes
+
+    ; Say so when the last search came up empty
+    cmp qword [search_failed], 0
+    je .rs_sb_no_fail
+    lea rsi, [search_fail_str]
+    mov rdx, search_fail_len
+    call out_bytes
+    add r13, search_fail_len
+.rs_sb_no_fail:
 
     ; Pad with spaces until version position
     ; version = "show v0.1.0 " = 12 chars
@@ -2814,7 +2962,7 @@ highlight_line:
     je .hl_tab
     ; Regular char
     movzx eax, byte [r12 + r14]
-    call out_char
+    call hl_emit
     inc r14
     jmp .hl_char_loop
 
@@ -2836,7 +2984,7 @@ highlight_line:
     call out_color
     mov r15, ST_STRING_DQ
     movzx eax, byte [r12 + r14]
-    call out_char
+    call hl_emit
     inc r14
     jmp .hl_char_loop
 
@@ -2845,7 +2993,7 @@ highlight_line:
     call out_color
     mov r15, ST_STRING_SQ
     movzx eax, byte [r12 + r14]
-    call out_char
+    call hl_emit
     inc r14
     jmp .hl_char_loop
 
@@ -2854,16 +3002,16 @@ highlight_line:
     cmp al, '\'
     jne .hl_sdq_not_escape
     ; Escape: output this and next char
-    call out_char
+    call hl_emit
     inc r14
     cmp r14, r13
     jge .hl_done
     movzx eax, byte [r12 + r14]
-    call out_char
+    call hl_emit
     inc r14
     jmp .hl_char_loop
 .hl_sdq_not_escape:
-    call out_char
+    call hl_emit
     inc r14
     cmp al, '"'
     jne .hl_char_loop
@@ -2876,16 +3024,16 @@ highlight_line:
     movzx eax, byte [r12 + r14]
     cmp al, '\'
     jne .hl_ssq_not_escape
-    call out_char
+    call hl_emit
     inc r14
     cmp r14, r13
     jge .hl_done
     movzx eax, byte [r12 + r14]
-    call out_char
+    call hl_emit
     inc r14
     jmp .hl_char_loop
 .hl_ssq_not_escape:
-    call out_char
+    call hl_emit
     inc r14
     cmp al, 0x27
     jne .hl_char_loop
@@ -2915,7 +3063,7 @@ highlight_line:
     inc r14
     jmp .hl_char_loop
 .hl_lc_not_tab:
-    call out_char
+    call hl_emit
     inc r14
     jmp .hl_char_loop
 
@@ -2968,7 +3116,7 @@ highlight_line:
     inc r14
     jmp .hl_in_block_comment
 .hl_bc_not_tab:
-    call out_char
+    call hl_emit
     inc r14
     jmp .hl_in_block_comment
 
@@ -2984,7 +3132,7 @@ highlight_line:
     jb .hl_number_done
     cmp al, '9'
     ja .hl_check_hex
-    call out_char
+    call hl_emit
     inc r14
     jmp .hl_number_loop
 .hl_check_hex:
@@ -3004,7 +3152,7 @@ highlight_line:
     jbe .hl_number_hex
     jmp .hl_number_done
 .hl_number_hex:
-    call out_char
+    call hl_emit
     inc r14
     jmp .hl_number_loop
 .hl_number_done:
@@ -3114,7 +3262,7 @@ highlight_line:
     inc r14
     jmp .hl_preproc_loop
 .hl_pp_not_tab:
-    call out_char
+    call hl_emit
     inc r14
     jmp .hl_preproc_loop
 .hl_preproc_end:
@@ -3140,7 +3288,7 @@ highlight_line:
     inc r14
     jmp .hl_plain_loop
 .hl_plain_not_tab:
-    call out_char
+    call hl_emit
     inc r14
     jmp .hl_plain_loop
 
