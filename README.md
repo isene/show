@@ -2,7 +2,7 @@
 
 <img src="img/show.svg" align="left" width="150" height="150">
 
-![Version](https://img.shields.io/badge/version-0.1.5-blue) ![Assembly](https://img.shields.io/badge/language-x86__64%20Assembly-purple) ![License](https://img.shields.io/badge/license-Unlicense-green) ![Platform](https://img.shields.io/badge/platform-Linux%20x86__64-blue) ![Dependencies](https://img.shields.io/badge/dependencies-none-brightgreen) ![Binary](https://img.shields.io/badge/binary-~38KB-orange)
+![Version](https://img.shields.io/badge/version-0.1.6-blue) ![Assembly](https://img.shields.io/badge/language-x86__64%20Assembly-purple) ![License](https://img.shields.io/badge/license-Unlicense-green) ![Platform](https://img.shields.io/badge/platform-Linux%20x86__64-blue) ![Dependencies](https://img.shields.io/badge/dependencies-none-brightgreen) ![Binary](https://img.shields.io/badge/binary-~38KB-orange)
 
 File viewer with syntax highlighting, written in x86_64 Linux assembly. No libc, no runtime, pure syscalls. Single static binary, 38KB.
 
@@ -79,7 +79,15 @@ show /var/log/syslog      # live view; press G to follow it like tail -f
 | G / End | Go to bottom |
 | l | Toggle line numbers |
 | Left / Right | Horizontal scroll |
+| / | Search forward (Enter runs it, Esc cancels) |
+| n | Jump to the next match |
+| N | Jump to the previous match |
 | q | Quit |
+
+Search wraps at either end of the file, and follows vim's smartcase
+rule: an all-lower-case pattern ignores case, a pattern with any
+capital in it matches exactly. A pattern that matches nothing leaves
+the view where it is.
 
 ## Syntax Highlighting
 

@@ -611,6 +611,8 @@ hl_state:           resq 1
 search_buf:         resb MAX_SEARCH_LEN
 search_len:         resq 1
 search_active:      resq 1
+match_line:         resq 1          ; line holding the current match (-1 none)
+search_nocase:      resb 1          ; 1 when the pattern is all lower case
 
 ; Output buffer
 out_buf:            resb OUT_BUF_SIZE
@@ -1878,6 +1880,7 @@ run_pager:
     mov qword [left_col], 0
     mov qword [show_line_numbers], 1
     mov qword [search_active], 0
+    mov qword [match_line], -1
 
 .pager_loop:
     ; Check SIGWINCH
@@ -2020,15 +2023,47 @@ run_pager:
     jmp .pager_loop
 
 .pg_search:
-    ; TODO: search prompt
-    jmp .pager_loop
+    call search_prompt
+    test rax, rax
+    jz .pg_search_redraw             ; cancelled — just repaint
+    mov qword [search_active], 1
+    mov rdi, [top_line]
+    inc rdi                          ; start below the current top
+    mov esi, 1
+    jmp .pg_search_run
 
 .pg_search_next:
-    ; TODO: search next
-    jmp .pager_loop
+    cmp qword [search_active], 0
+    je .pager_loop
+    mov rdi, [match_line]
+    inc rdi
+    mov esi, 1
+    jmp .pg_search_run
 
 .pg_search_prev:
-    ; TODO: search prev
+    cmp qword [search_active], 0
+    je .pager_loop
+    mov rdi, [match_line]
+    dec rdi
+    mov esi, -1
+.pg_search_run:
+    call find_match
+    cmp rax, -1
+    je .pg_search_redraw             ; no match — leave the view where it is
+    mov [match_line], rax
+    mov [top_line], rax
+    ; Don't scroll past the last full screen.
+    mov rax, [line_count]
+    mov rcx, [term_rows]
+    sub rax, rcx
+    inc rax
+    jns .pg_search_clamp
+    xor eax, eax
+.pg_search_clamp:
+    cmp [top_line], rax
+    jle .pg_search_redraw
+    mov [top_line], rax
+.pg_search_redraw:
     jmp .pager_loop
 
 .pager_quit:
@@ -2046,6 +2081,262 @@ run_pager:
 
     call restore_termios
 
+    pop r15
+    pop r14
+    pop r13
+    pop r12
+    pop rbx
+    ret
+
+; ══════════════════════════════════════════════════════════════════════
+; out_raw — rsi = bytes, rdx = length. Emits show's own ANSI, bypassing
+; the file-byte sanitiser (which would turn every ESC into '?').
+; ══════════════════════════════════════════════════════════════════════
+out_raw:
+    push rbx
+    mov bl, [out_safe]
+    mov byte [out_safe], 0
+    call out_bytes
+    mov [out_safe], bl
+    pop rbx
+    ret
+
+; ══════════════════════════════════════════════════════════════════════
+; goto_status_row — park the cursor at column 1 of the bottom row and
+; clear it, ready for the search prompt.
+; ══════════════════════════════════════════════════════════════════════
+goto_status_row:
+    push rbx
+    mov bl, [out_safe]
+    mov byte [out_safe], 0
+    mov al, 27
+    call out_char
+    mov al, '['
+    call out_char
+    mov rax, [term_rows]
+    lea rdi, [num_buf]
+    call itoa
+    lea rsi, [num_buf]
+    mov rdx, rax
+    call out_bytes
+    mov al, ';'
+    call out_char
+    mov al, '1'
+    call out_char
+    mov al, 'H'
+    call out_char
+    lea rsi, [clr_eol]
+    mov rdx, clr_eol_len
+    call out_bytes
+    mov [out_safe], bl
+    pop rbx
+    ret
+
+; ══════════════════════════════════════════════════════════════════════
+; search_prompt — read a pattern on the bottom row. Enter accepts, Esc
+; cancels, backspace on an empty prompt cancels too. rax = 1 accepted,
+; 0 cancelled. Sets search_nocase when the pattern carries no capital,
+; so /foo matches Foo but /Foo stays exact (vim's smartcase).
+; ══════════════════════════════════════════════════════════════════════
+search_prompt:
+    push rbx
+    mov qword [search_len], 0
+.sp_draw:
+    call out_reset
+    call goto_status_row
+    mov al, '/'
+    call out_char
+    lea rsi, [search_buf]
+    mov rdx, [search_len]
+    call out_bytes
+    lea rsi, [show_cursor]
+    mov rdx, show_cursor_len
+    call out_raw
+    call out_flush
+    call read_key
+    cmp rax, 13
+    je .sp_accept
+    cmp rax, 10
+    je .sp_accept
+    cmp rax, 27
+    je .sp_cancel
+    cmp rax, 127
+    je .sp_back
+    cmp rax, 8
+    je .sp_back
+    cmp rax, ' '
+    jb .sp_draw                      ; other control keys and arrows: ignore
+    cmp rax, 126
+    ja .sp_draw
+    mov rcx, [search_len]
+    cmp rcx, MAX_SEARCH_LEN
+    jge .sp_draw
+    mov [search_buf + rcx], al
+    inc qword [search_len]
+    jmp .sp_draw
+.sp_back:
+    cmp qword [search_len], 0
+    je .sp_cancel
+    dec qword [search_len]
+    jmp .sp_draw
+.sp_cancel:
+    mov qword [search_len], 0
+    xor ebx, ebx
+    jmp .sp_out
+.sp_accept:
+    cmp qword [search_len], 0
+    je .sp_cancel
+    ; smartcase: any capital in the pattern means match exactly
+    mov byte [search_nocase], 1
+    xor ecx, ecx
+.sp_case:
+    cmp rcx, [search_len]
+    jge .sp_case_done
+    movzx eax, byte [search_buf + rcx]
+    cmp al, 'A'
+    jb .sp_case_next
+    cmp al, 'Z'
+    ja .sp_case_next
+    mov byte [search_nocase], 0
+    jmp .sp_case_done
+.sp_case_next:
+    inc rcx
+    jmp .sp_case
+.sp_case_done:
+    mov ebx, 1
+.sp_out:
+    call out_reset
+    lea rsi, [hide_cursor]
+    mov rdx, hide_cursor_len
+    call out_raw
+    call out_flush
+    mov rax, rbx
+    pop rbx
+    ret
+
+; ══════════════════════════════════════════════════════════════════════
+; line_bounds — rdi = line index. rsi = pointer to the line's first byte,
+; rcx = its length with the trailing newline dropped.
+; ══════════════════════════════════════════════════════════════════════
+line_bounds:
+    push rbx
+    mov rbx, [line_offsets + rdi*8]
+    mov rsi, rbx
+    add rsi, [file_buf]
+    lea rax, [rdi + 1]
+    cmp rax, [line_count]
+    jge .lb_last
+    mov rcx, [line_offsets + rax*8]
+    sub rcx, rbx
+    jz .lb_done
+    dec rcx                          ; drop the '\n'
+    jmp .lb_done
+.lb_last:
+    mov rcx, [file_size]
+    sub rcx, rbx
+.lb_done:
+    pop rbx
+    ret
+
+; ══════════════════════════════════════════════════════════════════════
+; line_contains — rdi = line pointer, rsi = line length. al = 1 when the
+; search pattern occurs in it. Plain scan: lines are short, and this runs
+; once per keystroke, never in a render loop.
+; ══════════════════════════════════════════════════════════════════════
+line_contains:
+    push rbx
+    push r12
+    push r13
+    push r14
+    mov r12, [search_len]
+    test r12, r12
+    jz .lc_no
+    cmp rsi, r12
+    jb .lc_no
+    mov r13, rsi
+    sub r13, r12                     ; last offset a match could start at
+    xor r14d, r14d
+.lc_outer:
+    cmp r14, r13
+    ja .lc_no
+    xor ebx, ebx
+.lc_inner:
+    cmp rbx, r12
+    jge .lc_yes
+    mov rcx, r14
+    add rcx, rbx
+    movzx eax, byte [rdi + rcx]
+    movzx ecx, byte [search_buf + rbx]
+    cmp byte [search_nocase], 0
+    je .lc_cmp
+    cmp al, 'A'                      ; fold the file byte; the pattern is
+    jb .lc_cmp                       ; already lower case in this mode
+    cmp al, 'Z'
+    ja .lc_cmp
+    add al, 32
+.lc_cmp:
+    cmp al, cl
+    jne .lc_next
+    inc rbx
+    jmp .lc_inner
+.lc_next:
+    inc r14
+    jmp .lc_outer
+.lc_yes:
+    mov eax, 1
+    jmp .lc_out
+.lc_no:
+    xor eax, eax
+.lc_out:
+    pop r14
+    pop r13
+    pop r12
+    pop rbx
+    ret
+
+; ══════════════════════════════════════════════════════════════════════
+; find_match — rdi = line to start at, esi = +1 forward / -1 backward.
+; Walks every line once, wrapping at either end, and returns the first
+; line containing the pattern in rax, or -1.
+; ══════════════════════════════════════════════════════════════════════
+find_match:
+    push rbx
+    push r12
+    push r13
+    push r14
+    push r15
+    mov r12, rdi
+    movsx r13, esi
+    mov r14, [line_count]
+    test r14, r14
+    jz .fm_none
+    mov r15, r14                     ; every line gets exactly one look
+.fm_loop:
+    test r12, r12
+    jns .fm_hi
+    lea r12, [r14 - 1]               ; wrapped off the top
+    jmp .fm_test
+.fm_hi:
+    cmp r12, r14
+    jl .fm_test
+    xor r12d, r12d                   ; wrapped off the bottom
+.fm_test:
+    mov rdi, r12
+    call line_bounds                 ; rsi = ptr, rcx = length
+    mov rdi, rsi
+    mov rsi, rcx
+    call line_contains
+    test al, al
+    jnz .fm_hit
+    add r12, r13
+    dec r15
+    jnz .fm_loop
+.fm_none:
+    mov rax, -1
+    jmp .fm_out
+.fm_hit:
+    mov rax, r12
+.fm_out:
     pop r15
     pop r14
     pop r13
