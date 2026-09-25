@@ -154,7 +154,7 @@ err_open_len    equ $ - err_open
 err_mmap:       db "show: mmap failed", 10
 err_mmap_len    equ $ - err_mmap
 
-version_str:    db "show 0.1.5", 10
+version_str:    db "show 0.1.7", 10
 version_str_len equ $ - version_str
 
 ; Separator for line numbers
